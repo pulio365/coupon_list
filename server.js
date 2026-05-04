@@ -5,82 +5,51 @@ const cors = require("cors");
 require("dotenv").config();
 
 const app = express();
+
+// 중요: 서명 검증을 위해 rawBody를 저장하도록 설정
+app.use(
+  express.json({
+    verify: function (req, res, buf) {
+      req.rawBody = buf.toString("utf8");
+    },
+  }),
+);
 app.use(cors());
-app.use(express.json());
 
 const MALL_ID = process.env.CAFE24_MALL_ID;
 const CLIENT_ID = process.env.CAFE24_CLIENT_ID;
 const CLIENT_SECRET = process.env.CAFE24_CLIENT_SECRET;
+const REDIRECT_URI = "/";
+
+// 실제 서비스에서는 Redis나 DB에 저장해야 합니다.
+// 현재는 테스트용으로 메모리에 저장합니다. (서버 재시작 시 초기화됨)
+let cachedToken = null;
 
 // ============================================================
-// 서명 검증
+// 서명 검증 (믹스패널 코드 방식 유지)
 // ============================================================
 function verifyCafe24Signature(req) {
   const signature = req.headers["x-cafe24-signature"];
-  if (!signature) {
-    console.warn("[PF] 서명 헤더 없음 - 통과");
-    return true;
-  }
-  if (!CLIENT_SECRET) {
-    console.warn("[PF] CLIENT_SECRET 미설정 - 스킵");
-    return true;
-  }
+  if (!signature) return true;
 
-  const hmac1 = crypto
+  const hmac = crypto
     .createHmac("sha256", CLIENT_SECRET)
-    .update(req.rawBody)
+    .update(req.rawBody || "")
     .digest("base64");
-  if (hmac1 === signature) {
-    console.log("[PF] 서명 검증 성공 (방법1)");
-    return true;
-  }
 
-  try {
-    const decoded = Buffer.from(CLIENT_SECRET, "base64").toString("utf8");
-    const hmac2 = crypto
-      .createHmac("sha256", decoded)
-      .update(req.rawBody)
-      .digest("base64");
-    if (hmac2 === signature) {
-      console.log("[PF] 서명 검증 성공 (방법2)");
-      return true;
-    }
-  } catch (e) {}
-
-  try {
-    const hmac3 = crypto
-      .createHmac("sha256", CLIENT_SECRET)
-      .update(JSON.stringify(req.body))
-      .digest("base64");
-    if (hmac3 === signature) {
-      console.log("[PF] 서명 검증 성공 (방법3)");
-      return true;
-    }
-  } catch (e) {}
-
-  console.warn("[PF] 서명 검증 실패 - 수신:", signature);
-  const hmacDebug = crypto
-    .createHmac("sha256", CLIENT_SECRET)
-    .update(req.rawBody)
-    .digest("base64");
-  console.warn("[PF] 계산:", hmacDebug);
-  return true; // 확인 완료 후 false로 변경
+  return hmac === signature;
 }
 
-app.get("/oauth/callback", function (req, res) {
-  handleOAuthCallback(req, res);
-});
-
-async function handleOAuthCallback(req, res) {
-  const { code, error, error_description, mall_id } = req.query;
-  const mallId = mall_id || MALL_ID;
-
-  if (error) return res.status(400).send(`설치 오류: ${error_description}`);
-  if (!code) return res.status(400).send("인증 코드가 없습니다.");
+// ============================================================
+// OAuth 인증 (토큰 발급)
+// ============================================================
+app.get("/oauth/callback", async function (req, res) {
+  const { code, mall_id } = req.query;
+  const targetMall = mall_id || MALL_ID;
 
   try {
     const tokenResponse = await axios.post(
-      `https://${mallId}.cafe24api.com/api/v2/oauth/token`,
+      `https://${targetMall}.cafe24api.com/api/v2/oauth/token`,
       new URLSearchParams({
         grant_type: "authorization_code",
         code,
@@ -93,25 +62,32 @@ async function handleOAuthCallback(req, res) {
         },
       },
     );
-    console.log("[PF] 앱 설치 완료:", mallId, tokenResponse.data.access_token);
-    res.send(`<html><body style="font-family:sans-serif;text-align:center;padding:50px;">
-            <h1>✅ 앱 설치 완료!</h1><p>쇼핑몰 <strong>${mallId}</strong>에 연결되었습니다.</p>
-        </body></html>`);
-  } catch (err) {
-    const errData = err.response ? err.response.data : err.message;
-    console.error("[PF] 토큰 발급 실패:", JSON.stringify(errData));
-    res
-      .status(500)
-      .send(`<h1>❌ 설치 실패</h1><p>${JSON.stringify(errData)}</p>`);
-  }
-}
 
-// GET /api/coupons?member_id=xxx
+    // 발급받은 토큰 저장
+    cachedToken = tokenResponse.data.access_token;
+    console.log("[PF] 토큰 발급 성공!");
+
+    res.send("<h1>✅ 연결 성공! 이제 쿠폰 조회가 가능합니다.</h1>");
+  } catch (err) {
+    console.error("[PF] 토큰 발급 실패:", err.response?.data || err.message);
+    res.status(500).send("인증 실패");
+  }
+});
+
+// ============================================================
+// 쿠폰 조회 API (수정된 핵심 부분)
+// ============================================================
 app.get("/api/coupons", async (req, res) => {
   const { member_id } = req.query;
 
   if (!member_id) {
-    return res.status(400).json({ error: "member_id 필요해요" });
+    return res.status(400).json({ error: "member_id가 필요합니다." });
+  }
+
+  if (!cachedToken) {
+    return res
+      .status(401)
+      .json({ error: "먼저 앱 설치(/)를 통해 인증을 완료해주세요." });
   }
 
   try {
@@ -119,18 +95,28 @@ app.get("/api/coupons", async (req, res) => {
       `https://${MALL_ID}.cafe24api.com/api/v2/admin/customers/${member_id}/coupons`,
       {
         headers: {
-          Authorization: `Basic ${Buffer.from(CLIENT_ID + ":" + CLIENT_SECRET).toString("base64")}`,
-          "Content-Type": "application/x-www-form-urlencoded",
+          // 중요: Basic이 아니라 Bearer 토큰을 사용해야 합니다.
+          Authorization: `Bearer ${cachedToken}`,
+          "Content-Type": "application/json",
+          "X-Cafe24-Api-Version": "2024-06-01", // 최신 버전 명시 권장
         },
       },
     );
 
-    // 쿠폰 리스트만 프론트로 전달
-    res.json({ coupons: response.data.coupons });
+    res.json({
+      success: true,
+      coupons: response.data.coupons,
+    });
   } catch (e) {
-    console.error(e.response?.data || e.message);
-    res.status(500).json({ error: "쿠폰 조회 실패" });
+    const errorDetail = e.response?.data || e.message;
+    console.error("[PF] 쿠폰 조회 에러:", errorDetail);
+
+    // 토큰이 만료된 경우 401 에러가 발생할 수 있습니다.
+    res.status(e.response?.status || 500).json({
+      error: "쿠폰 조회 실패",
+      detail: errorDetail,
+    });
   }
 });
 
-app.listen(3000, () => console.log("서버 실행 중 :3000"));
+app.listen(3000, () => console.log("서버 실행 중 : 3000"));
