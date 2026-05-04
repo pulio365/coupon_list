@@ -19,7 +19,7 @@ app.use(cors());
 const MALL_ID = process.env.CAFE24_MALL_ID;
 const CLIENT_ID = process.env.CAFE24_CLIENT_ID;
 const CLIENT_SECRET = process.env.CAFE24_CLIENT_SECRET;
-const REDIRECT_URI = "/";
+const REDIRECT_URI = "/oauth/callback";
 
 // 실제 서비스에서는 Redis나 DB에 저장해야 합니다.
 // 현재는 테스트용으로 메모리에 저장합니다. (서버 재시작 시 초기화됨)
