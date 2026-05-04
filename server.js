@@ -115,8 +115,6 @@ app.get("/api/coupons", async (req, res) => {
   }
 
   try {
-    const token = await getAccessToken();
-
     const response = await axios.get(
       `https://${MALL_ID}.cafe24api.com/api/v2/admin/customers/${member_id}/coupons`,
       {
