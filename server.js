@@ -119,9 +119,8 @@ app.get("/api/coupons", async (req, res) => {
       `https://${MALL_ID}.cafe24api.com/api/v2/admin/customers/${member_id}/coupons`,
       {
         headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-          "X-Cafe24-Api-Version": "2024-06-01",
+          Authorization: `Basic ${Buffer.from(CLIENT_ID + ":" + CLIENT_SECRET).toString("base64")}`,
+          "Content-Type": "application/x-www-form-urlencoded",
         },
       },
     );
