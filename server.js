@@ -124,7 +124,20 @@ function normalizeCoupon(coupon) {
     },
   };
 }
+// 앱 설치 시작 - 카페24가 이 주소로 먼저 접근함
+app.get("/", (req, res) => {
+  const { mall_id } = req.query; // 카페24가 mall_id를 넘겨줌
 
+  const authUrl =
+    `https://${mall_id}.cafe24api.com/api/v2/oauth/authorize` +
+    `?response_type=code` +
+    `&client_id=${CAFE24_CLIENT_ID}` +
+    `&redirect_uri=${CAFE24_REDIRECT_URI}` +
+    `&scope=mall.read_promotion`;
+
+  // 카페24 로그인/허용 화면으로 이동
+  res.redirect(authUrl);
+});
 // ─────────────────────────────────────────────
 // OAuth: Authorization Code → Token 교환
 // GET /api/auth/callback?code=xxx
