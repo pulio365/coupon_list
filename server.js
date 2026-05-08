@@ -249,6 +249,7 @@ app.get("/api/auth/callback", async (req, res) => {
 //   (토큰은 서버가 알아서 관리 - 프론트는 신경 안 써도 됨)
 // ─────────────────────────────────────────────
 app.get("/api/coupons/:member_id", async (req, res) => {
+  console.log(11111111111, "쿠폰 api 호출됨");
   const { member_id } = req.params;
   const { shop_no = 1 } = req.query;
 
