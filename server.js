@@ -19,73 +19,89 @@ const CAFE24_API_BASE = `https://${CAFE24_MALL_ID}.cafe24api.com/api/v2`;
 
 // ─────────────────────────────────────────────
 // ✅ 토큰 저장소 (서버 메모리)
-// Render 재시작되면 사라지지만 테스트용으로는 충분
-// 실서비스라면 DB(MySQL, Redis 등)에 저장하세요
 // ─────────────────────────────────────────────
 let tokenStore = {
   access_token: null,
   refresh_token: null,
-  expires_at: null, // 만료 시각 (Date 객체)
+  expires_at: null,
 };
 
 // ─────────────────────────────────────────────
-// [유틸] 토큰 저장
+// [유틸] 토큰 저장 및 로그 출력
 // ─────────────────────────────────────────────
 function saveToken(data) {
   tokenStore.access_token = data.access_token;
   tokenStore.refresh_token = data.refresh_token;
-  // expires_in은 초 단위 (카페24는 보통 7200초 = 2시간)
   tokenStore.expires_at = new Date(Date.now() + data.expires_in * 1000);
-  console.log("✅ 토큰 저장 완료! 만료시각:", tokenStore.expires_at);
+
+  console.log("--------------------------------------------------");
+  console.log("🟢 [TOKEN SAVE] 토큰 저장 완료");
+  console.log(
+    " - Access Token (앞10자):",
+    tokenStore.access_token.substring(0, 10) + "...",
+  );
+  console.log(" - 만료 시각:", tokenStore.expires_at.toLocaleString());
+  console.log("--------------------------------------------------");
 }
 
 // ─────────────────────────────────────────────
-// [유틸] 유효한 access_token 가져오기
-// 만료됐으면 refresh_token으로 자동 갱신
+// [유틸] 유효한 access_token 가져오기 (갱신 로직 포함)
 // ─────────────────────────────────────────────
 async function getValidAccessToken() {
-  // 토큰 자체가 없으면 앱 설치 안 된 것
+  console.log("🔍 [TOKEN CHECK] 토큰 유효성 검사 시작...");
+
   if (!tokenStore.access_token) {
+    console.error("❌ [TOKEN ERROR] 서버에 저장된 토큰이 없습니다.");
     throw new Error("NO_TOKEN");
   }
 
-  // 만료 5분 전부터 미리 갱신
   const fiveMinutes = 5 * 60 * 1000;
   const isExpired = tokenStore.expires_at
     ? Date.now() > tokenStore.expires_at - fiveMinutes
     : false;
 
   if (isExpired) {
-    console.log("🔄 토큰 만료 임박 - 자동 갱신 중...");
-    const credentials = Buffer.from(
-      `${CAFE24_CLIENT_ID}:${CAFE24_CLIENT_SECRET}`,
-    ).toString("base64");
+    console.log("🔄 [TOKEN REFRESH] 토큰 만료 임박 - 갱신 요청 중...");
+    try {
+      const credentials = Buffer.from(
+        `${CAFE24_CLIENT_ID}:${CAFE24_CLIENT_SECRET}`,
+      ).toString("base64");
 
-    const response = await axios.post(
-      `${CAFE24_API_BASE}/oauth/token`,
-      new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: tokenStore.refresh_token,
-      }).toString(),
-      {
-        headers: {
-          Authorization: `Basic ${credentials}`,
-          "Content-Type": "application/x-www-form-urlencoded",
+      const response = await axios.post(
+        `${CAFE24_API_BASE}/oauth/token`,
+        new URLSearchParams({
+          grant_type: "refresh_token",
+          refresh_token: tokenStore.refresh_token,
+        }).toString(),
+        {
+          headers: {
+            Authorization: `Basic ${credentials}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
         },
-      },
-    );
+      );
 
-    saveToken(response.data);
-    console.log("✅ 토큰 자동 갱신 완료!");
+      saveToken(response.data);
+      console.log("✅ [TOKEN REFRESH] 성공");
+    } catch (err) {
+      console.error(
+        "❌ [TOKEN REFRESH ERROR] 실패:",
+        err.response?.data || err.message,
+      );
+      throw err;
+    }
+  } else {
+    console.log("✅ [TOKEN CHECK] 기존 토큰 사용 가능");
   }
 
   return tokenStore.access_token;
 }
 
 // ─────────────────────────────────────────────
-// [유틸] 카페24 Admin API 공통 요청
+// [유틸] 카페24 Admin API 공통 요청 함수
 // ─────────────────────────────────────────────
 async function cafe24AdminRequest(accessToken, endpoint, params = {}) {
+  console.log(`📡 [CAFE24 API CALL] ${endpoint}`);
   const response = await axios.get(`${CAFE24_API_BASE}${endpoint}`, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -98,7 +114,7 @@ async function cafe24AdminRequest(accessToken, endpoint, params = {}) {
 }
 
 // ─────────────────────────────────────────────
-// [유틸] 쿠폰 응답 정규화
+// [유틸] 쿠폰 데이터 정규화
 // ─────────────────────────────────────────────
 function normalizeCoupon(coupon) {
   const now = new Date();
@@ -113,20 +129,13 @@ function normalizeCoupon(coupon) {
         type: "fixed",
         label: "정액할인",
         amount: Number(coupon.benefit_price ?? 0),
-        percentage: null,
-        percentage_round_unit: null,
-        max_price: null,
       };
       break;
     case "B":
       discount = {
         type: "percentage",
         label: "정률할인",
-        amount: null,
         percentage: Number(coupon.benefit_percentage ?? 0),
-        percentage_round_unit: Number(
-          coupon.benefit_percentage_round_unit ?? 1,
-        ),
         max_price: coupon.benefit_percentage_max_price
           ? Number(coupon.benefit_percentage_max_price)
           : null,
@@ -137,19 +146,6 @@ function normalizeCoupon(coupon) {
         type: "shipping",
         label: "배송비할인",
         amount: Number(coupon.benefit_price ?? 0),
-        percentage: null,
-        percentage_round_unit: null,
-        max_price: null,
-      };
-      break;
-    case "D":
-      discount = {
-        type: "credit",
-        label: "적립금",
-        amount: Number(coupon.credit_amount ?? 0),
-        percentage: null,
-        percentage_round_unit: null,
-        max_price: null,
       };
       break;
     default:
@@ -160,54 +156,56 @@ function normalizeCoupon(coupon) {
 
   return {
     coupon_no: coupon.coupon_no,
-    issue_no: coupon.issue_no,
     coupon_name: coupon.coupon_name,
-    shop_no: coupon.shop_no,
     discount,
     conditions: {
       has_min_price: hasMinPrice,
       min_price: hasMinPrice ? Number(coupon.available_min_price ?? 0) : 0,
-      available_payment_methods: coupon.available_payment_methods ?? [],
     },
     validity: {
-      issued_date: coupon.issued_date,
-      begin_datetime: coupon.available_begin_datetime,
-      end_datetime: coupon.available_end_datetime,
-      is_expired: endDate ? endDate < now : false,
       is_available: endDate ? endDate >= now : true,
+      end_datetime: coupon.available_end_datetime,
     },
   };
 }
 
 // ─────────────────────────────────────────────
-// 앱 설치 시작
-// 카페24 개발자센터 테스트실행 → 여기로 먼저 옴
+// 1. 앱 설치 시작 (OAuth 인증 유도)
 // ─────────────────────────────────────────────
 app.get("/", (req, res) => {
   const { mall_id } = req.query;
+  console.log("🚀 [INSTALL] 앱 설치/인증 요청 수신. Mall ID:", mall_id);
 
+  const targetMall = mall_id || CAFE24_MALL_ID;
   const authUrl =
-    `https://${mall_id}.cafe24api.com/api/v2/oauth/authorize` +
+    `https://${targetMall}.cafe24api.com/api/v2/oauth/authorize` +
     `?response_type=code` +
     `&client_id=${CAFE24_CLIENT_ID}` +
     `&redirect_uri=${CAFE24_REDIRECT_URI}` +
     `&scope=mall.read_promotion`;
 
+  console.log("🔗 [AUTH URL] 생성됨:", authUrl);
   res.redirect(authUrl);
 });
 
 // ─────────────────────────────────────────────
-// ✅ OAuth 콜백: code → access_token 교환 후 저장
+// 2. OAuth 콜백 (토큰 획득 및 저장)
 // ─────────────────────────────────────────────
 app.get("/api/auth/callback", async (req, res) => {
   const { code } = req.query;
-  if (!code) return res.status(400).json({ error: "code가 없습니다." });
+  console.log("📥 [CALLBACK] 카페24로부터 인증 코드(Code) 수신:", code);
+
+  if (!code) {
+    console.error("❌ [CALLBACK ERROR] Code가 전달되지 않았습니다.");
+    return res.status(400).send("Code missing");
+  }
 
   try {
     const credentials = Buffer.from(
       `${CAFE24_CLIENT_ID}:${CAFE24_CLIENT_SECRET}`,
     ).toString("base64");
 
+    console.log("🚀 [OAUTH] Access Token 교환 요청 시작...");
     const response = await axios.post(
       `${CAFE24_API_BASE}/oauth/token`,
       new URLSearchParams({
@@ -223,46 +221,43 @@ app.get("/api/auth/callback", async (req, res) => {
       },
     );
 
-    // ✅ 핵심! 서버에 토큰 저장
     saveToken(response.data);
-
-    // 설치 완료 페이지 보여주기
-    res.send(`
-      <h2>✅ 앱 설치 완료!</h2>
-      <p>이제 쿠폰 조회 API를 사용할 수 있습니다.</p>
-      <p>이 창을 닫아도 됩니다.</p>
-    `);
+    res.send(
+      "<h2>✅ 앱 설치 및 토큰 발급 완료!</h2><p>이제 쿠폰 조회가 가능합니다.</p>",
+    );
   } catch (err) {
-    console.error("[콜백 오류]", err.response?.data || err.message);
-    return res.status(500).json({
-      error: "토큰 발급 실패",
-      detail: err.response?.data,
-    });
+    console.error(
+      "❌ [CALLBACK ERROR] 토큰 교환 실패:",
+      err.response?.data || err.message,
+    );
+    res
+      .status(500)
+      .json({ error: "토큰 발급 실패", detail: err.response?.data });
   }
 });
 
 // ─────────────────────────────────────────────
-// ✅ 핵심 API: 회원 쿠폰 목록 조회
-//
-// 프론트에서 호출:
-//   GET /api/coupons/{member_id}
-//   (토큰은 서버가 알아서 관리 - 프론트는 신경 안 써도 됨)
+// 3. 메인 API: 회원 쿠폰 목록 조회
 // ─────────────────────────────────────────────
 app.get("/api/coupons/:member_id", async (req, res) => {
-  console.log(11111111111, "쿠폰 api 호출됨");
   const { member_id } = req.params;
   const { shop_no = 1 } = req.query;
 
+  console.log("==================================================");
+  console.log(`📡 [API REQUEST] 쿠폰 조회 실행`);
+  console.log(` - ID: ${member_id}`);
+  console.log(` - Shop No: ${shop_no}`);
+  console.log("==================================================");
+
   try {
-    // ✅ 저장된 토큰 꺼내오기 (만료시 자동 갱신)
     const accessToken = await getValidAccessToken();
 
-    // 페이지네이션으로 전체 쿠폰 수집
     let allCoupons = [];
     let offset = 0;
     const limit = 100;
 
     while (true) {
+      console.log(`   * 데이터 수집 중... (Offset: ${offset})`);
       const data = await cafe24AdminRequest(
         accessToken,
         `/admin/customers/${member_id}/coupons`,
@@ -274,33 +269,48 @@ app.get("/api/coupons/:member_id", async (req, res) => {
 
       if (coupons.length < limit) break;
       offset += limit;
-      if (offset >= 10000) break;
+      if (offset >= 1000) break; // 무한루프 방지 안전장치
     }
 
     const normalized = allCoupons
       .map(normalizeCoupon)
       .filter((c) => c.validity.is_available);
 
+    console.log(`✅ [SUCCESS] 조회 완료. 유효 쿠폰 수: ${normalized.length}`);
     return res.json({
       member_id,
-      shop_no,
       total_count: normalized.length,
       coupons: normalized,
     });
   } catch (err) {
-    // 토큰 없음 = 앱 설치 안 됨
+    console.error("❌ [API ERROR] 처리 실패");
+
     if (err.message === "NO_TOKEN") {
-      return res.status(401).json({ error: "앱 설치가 필요합니다." });
+      console.error(" > 원인: 서버에 저장된 토큰이 없음 (재인증 필요)");
+      return res
+        .status(401)
+        .json({ error: "토큰이 없습니다. 앱 설치를 진행하세요." });
     }
-    console.error("[쿠폰 조회 오류]", err.response?.data || err.message);
-    return res.status(500).json({
+
+    const errorStatus = err.response?.status || 500;
+    const errorData = err.response?.data || err.message;
+
+    console.error(` > 상태코드: ${errorStatus}`);
+    console.error(` > 상세내용:`, JSON.stringify(errorData, null, 2));
+
+    return res.status(errorStatus).json({
       error: "쿠폰 조회 실패",
-      detail: err.response?.data,
+      detail: errorData,
     });
   }
 });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`✅ 서버 실행 중: http://localhost:${PORT}`);
+  console.log(`
+  🚀 서버 구동 완료!
+  - 로컬 주소: http://localhost:${PORT}
+  - API 엔드포인트: /api/coupons/:member_id
+  --------------------------------------------------
+  `);
 });
