@@ -5,7 +5,17 @@ const cors = require("cors");
 
 const app = express();
 app.use(express.json());
-app.use(cors());
+app.use(
+  cors({
+    origin: [
+      "https://pulio365.cafe24.com",
+      "https://puliodays.com",
+      "https://m.puliodays.com",
+    ],
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type"],
+  }),
+);
 
 const {
   CAFE24_MALL_ID,
